@@ -1671,9 +1671,8 @@ Tickets and the backend PR, opened with Paul's go-ahead:
 | --- | --- |
 | Epic | [O3-6238](https://openmrs.atlassian.net/browse/O3-6238) |
 | Patient endpoints, ready for review | [O3-6239](https://openmrs.atlassian.net/browse/O3-6239), [openmrs/openmrs-module-querystore#101](https://github.com/openmrs/openmrs-module-querystore/pull/101) |
-| The omnibar provider app | [O3-6240](https://openmrs.atlassian.net/browse/O3-6240), no PR yet |
-
-The follow-up branch has no ticket. It waits for Paul's decision and a port.
+| The omnibar provider app | [O3-6240](https://openmrs.atlassian.net/browse/O3-6240), [openmrs/openmrs-esm-querystore-app#1](https://github.com/openmrs/openmrs-esm-querystore-app/pull/1) (the contract recopy and links) |
+| Follow-ups, draft until #101 merges | [O3-6241](https://openmrs.atlassian.net/browse/O3-6241), [openmrs/openmrs-module-querystore#102](https://github.com/openmrs/openmrs-module-querystore/pull/102) |
 
 ### Bringing upstream main into the endpoint branch
 
@@ -1713,6 +1712,32 @@ The first review covered the merges, plus the frontend's contract recopy. The se
 - **Frontend contract recopy.** The app's contract folder was recopied from this repo's `main` at `ec92784` (tree `300284f`) and pinned by sha256 (`b615d7f9…`). The reviewer found it byte-identical, and the new optional `completions` field needs no change in the provider. The README and `package.json` links now point at the OpenMRS organization. Branch `chore/contract-ec92784`.
 - **Backend tests.** `mvn -B verify` with JDK 11: 713 api and 88 omod tests pass at `b3c25e3`, which is 0 commits behind upstream and pushed to the fork.
 - **Frontend tests.** `yarn verify`: 165 tests. `yarn build`: `Rspack compiled with 1 warning`, the asset size limit.
-- **`feat/omnibar-backend-followups` isn't part of this.** It was built on the benchmark branch, so it holds its 4 benchmark-only commits, and a dry-run cherry-pick of its 20 other commits conflicts at the second one. It is left for a later PR, after a port.
 - **No new origin.** Nothing here adds a request to another origin.
 - **Not tried** in a browser or on o3 after the merge.
+
+### The follow-ups ported for a second PR (Paul, 2026-11-03)
+
+`feat/omnibar-backend-followups` was built on the benchmark branch, so it couldn't go up as it stood. Its 22 Hermes commits went onto the merged endpoint branch as `feat/omnibar-endpoints-followups` on the fork, cherry-picked with `-x`:
+
+- **Left out as benchmark-only:** `a04624d` and `8a9b19a`, and `34c62d8`'s change to the benchmark-only test.
+- **Folded into `main`'s design where both sides had built one:** the progress tracking now sits in `main`'s `projectAllTypesForPatient`, which counts failed types and records. `reindexPatient(uuid, afterDelete)` runs the hook before `main`'s `reportProjection`. The branch's `PartialProjectionException` became `IncompleteProjectionException`.
+- **Dropped:** the `retryFailed` check, which only the benchmark search turned off.
+- **ADR:** its hunks took the follow-ups' text, without the mentions of the benchmark search.
+- **REST guide:** `docs/rest-api.md` now describes the rows served while a chart indexes, the retry backoff and its `Retry-After`, and the single 403.
+
+### Review round 2 (independent adversarial code and security reviews of the port, Claude): no blockers
+
+| Finding | Fix | Commit |
+| --- | --- | --- |
+| Security: the three endpoint rules | All three hold; partial rows are gated on the caller reading every type, checked against the live list of registered types | none |
+| MINOR: the every-type check passed when no type was registered | It now fails closed, with a test | `2160429` |
+| NIT: `warm()`'s retry condition relied on `&&` binding tighter than `\|\|` | Bracketed | `2160429` |
+| NIT: a duplicate `Patient` import and unused SLF4J imports in the controller, left by the first merge | Removed on #101's branch and merged up | `d7f6e6d`, `f3c0e2b` |
+| MINOR: a chart dropped past the 10,000-failure bound can be rebuilt by `searchByPatient`'s cold touch while its tombstone stays set, so the next `query()` runs one redundant reindex | Not changed: nothing is wrong afterwards, and the bound is rarely reached. Noted in #102 | none |
+| MINOR: `Retry-After` reveals how many times in a row a chart failed | Not changed: it is operational, and the caller already passed the patient check | none |
+| NIT: a delete-pending answer omits empty `groups` and `facets` | Not changed | none |
+
+- **Tests:** `mvn -B verify` passes, with 752 api and 93 omod tests at `2160429`, which is 0 commits behind upstream. #101's branch has 713 api and 88 omod tests at `d7f6e6d`.
+- **No new origin.**
+- **Not tried** on o3 after the port.
+
