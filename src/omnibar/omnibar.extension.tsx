@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import classNames from 'classnames';
 import { useTranslation } from 'react-i18next';
 import { InlineLoading } from '@carbon/react';
@@ -33,6 +33,7 @@ import {
 } from './omnibar.resource';
 import {
   commandIdOf,
+  isHelpQuery,
   type OmnibarCommandEntry,
   omnibarProvidersSlot,
   orderForListing,
@@ -72,6 +73,30 @@ function capNote(note: unknown): string | undefined {
   }
   const characters = Array.from(note);
   return characters.length > maxNoteLength ? `${characters.slice(0, maxNoteLength - 1).join('')}…` : note;
+}
+
+/** Where a translated sentence takes its commands, given to `t` in place of them and split on by withCommands. */
+const commandSlot = '\u0000';
+
+/**
+ * A translated sentence with its commands put in its slot, each in its own `<bdi>`: in a right-to-left
+ * sentence a slash next to it would otherwise join the sentence, and "/order amox" read "order amox/".
+ */
+function withCommands(sentence: string, commands: Array<string>) {
+  // A translation that repeats the slot still shows all its text, with the commands once
+  const [before, ...after] = sentence.split(commandSlot);
+  return (
+    <>
+      {before}
+      {commands.map((command, index) => (
+        <Fragment key={command}>
+          {index > 0 && ' · '}
+          <bdi>{command}</bdi>
+        </Fragment>
+      ))}
+      {after.join('')}
+    </>
+  );
 }
 
 /**
@@ -120,15 +145,17 @@ const Omnibar: React.FC = () => {
   }, [patient]);
 
   // Slash commands. The chosen command is a chip in the field, and the field then holds only the
-  // query. Without a chip, "/" as the first character with no space yet lists the commands, and
-  // "/alias " chooses one; anything else is plain text, "/word " included. A command is available only
+  // query. Without a chip, "/" as the first character with no space yet lists the commands, "?" alone
+  // or "/help" lists them all with examples, and "/alias " chooses one; anything else is plain text,
+  // "/word " included. A command is available only
   // in a scope one of its providers declares: choosing it never widens the scope, and a command that
   // stops being available (the patient chip removed, say) is dropped.
   const assigned = useAssignedExtensions(providersSlot);
   // Query results views may declare commands too; one only views declare mounts no providers here.
   const assignedViews = useAssignedExtensions(OMNIBAR_QUERY_RESULTS_SLOT);
   const [commandId, setCommandId] = useState<string | null>(null);
-  const listingCommands = !commandId && query.startsWith('/') && !/\s/u.test(query);
+  // Help lists the commands too, so their modules' translations, examples included, load for it as well
+  const listingCommands = !commandId && (isHelpQuery(query) || (query.startsWith('/') && !/\s/u.test(query)));
   const commandTable = useCommandTable(
     assigned,
     assignedViews,
@@ -153,6 +180,7 @@ const Omnibar: React.FC = () => {
     [activeCommand, query, commandTable, isAvailable],
   );
   const listing = parsedInput?.mode === 'listing';
+  const help = parsedInput?.mode === 'listing' && parsedInput.help === true;
   const [commandHighlight, setCommandHighlight] = useState<string | null>(null);
   const listedCommands = useMemo(
     () =>
@@ -1044,10 +1072,10 @@ const Omnibar: React.FC = () => {
 
           {parsedInput?.mode === 'text' && parsedInput.notCommand && (
             <p className={styles.commandNote} dir="auto">
-              {t('noCommand', 'No command /{{name}}', {
-                name: parsedInput.notCommand,
-                interpolation: { escapeValue: false },
-              })}
+              {withCommands(
+                t('noCommand', 'No command {{name}}', { name: commandSlot, interpolation: { escapeValue: false } }),
+                [`/${parsedInput.notCommand}`],
+              )}
             </p>
           )}
           {parsedInput?.mode === 'text' && parsedInput.unavailable && (
@@ -1099,19 +1127,35 @@ const Omnibar: React.FC = () => {
                           {available ? command.description : unavailableReason}
                         </span>
                       )}
+                      {help && available && command.examples.length > 0 && (
+                        <span className={styles.optionSubtitle} dir="auto">
+                          {withCommands(
+                            t('commandExamples', 'Try {{examples}}', {
+                              examples: commandSlot,
+                              interpolation: { escapeValue: false },
+                            }),
+                            command.examples.map((example) => `/${command.aliases[0]} ${example}`),
+                          )}
+                        </span>
+                      )}
                     </span>
                   </li>
                 );
               })}
             </ul>
           )}
+          {listing && !help && listedCommands.length > 0 && (
+            <p className={styles.commandNote} dir="auto">
+              {t('helpHint', 'Type ? for examples of each command')}
+            </p>
+          )}
           {listing && !listedCommands.length && (
             <p className={styles.commandNote} dir="auto">
               {parsedInput?.mode === 'listing' && parsedInput.prefix
-                ? t('noCommand', 'No command /{{name}}', {
-                    name: parsedInput.prefix,
-                    interpolation: { escapeValue: false },
-                  })
+                ? withCommands(
+                    t('noCommand', 'No command {{name}}', { name: commandSlot, interpolation: { escapeValue: false } }),
+                    [`/${parsedInput.prefix}`],
+                  )
                 : t('noCommands', 'No commands are available.')}
             </p>
           )}
