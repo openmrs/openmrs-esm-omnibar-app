@@ -29,6 +29,13 @@ import {
   type OmnibarViewMeta,
 } from './types';
 
+/**
+ * A line the bar writes with its commands in `<bdi>`s, such as "Try /lab weight · /lab cd4", found by
+ * its whole text: getByText alone reads only the text outside them. Each such line sets its own direction.
+ */
+const line = (text: string) => (_: string, element: Element | null) =>
+  Boolean(element?.matches('[dir="auto"]')) && element?.textContent === text;
+
 // As in omnibar.test.tsx: the framework mock's ExtensionSlot mounts nothing, so these behave like the
 // real ones. `select` filters the assigned extensions and <Extension state> passes state as props.
 const providerComponents = vi.hoisted(() => new Map<string, React.ComponentType<OmnibarProviderProps>>());
@@ -252,7 +259,9 @@ describe('slash commands in the bar', () => {
       render(<Omnibar />);
 
       await user.type(screen.getByRole('combobox'), '/zz');
-      expect(screen.getByText('No command /zz')).toBeInTheDocument();
+      expect(screen.getByText(line('No command /zz'))).toBeInTheDocument();
+      // In its own direction, so a right-to-left sentence can't move the slash to the end
+      expect(screen.getByText('/zz').tagName).toBe('BDI');
     });
 
     it('greys out a command with no provider in this scope, says why, and won’t choose it', async () => {
@@ -309,6 +318,21 @@ describe('slash commands in the bar', () => {
       await user.keyboard('{Tab}');
       expect(screen.getByText('Pages')).toBeInTheDocument();
       expect(field).toHaveFocus();
+    });
+
+    it.each(['/', '?'])('moves focus back with Shift+Tab after %j, choosing no command', async (typed) => {
+      const user = userEvent.setup();
+      builtIns();
+      inChart();
+      render(<Omnibar />);
+      const field = screen.getByRole('combobox');
+
+      await user.type(field, typed);
+      expect(screen.getByRole('option', { name: /patients/i })).toHaveAttribute('aria-selected', 'true');
+      await user.tab({ shift: true });
+
+      expect(screen.getByRole('button', { name: 'Remove Jane Doe context' })).toHaveFocus();
+      expect(field).toHaveValue(typed);
     });
 
     describe('order', () => {
@@ -448,7 +472,7 @@ describe('slash commands in the bar', () => {
 
       await user.type(screen.getByRole('combobox'), '/usr cd4');
 
-      expect(screen.getByText('No command /usr')).toBeInTheDocument();
+      expect(screen.getByText(line('No command /usr'))).toBeInTheDocument();
       expect(patients.seen.at(-1)).toEqual({ query: '/usr cd4', command: undefined });
     });
 
@@ -787,7 +811,7 @@ describe('slash commands in the bar', () => {
       ).not.toBeInTheDocument();
 
       await user.type(screen.getByRole('combobox'), 'ask cd4');
-      expect(screen.getByText('No command /ask')).toBeInTheDocument();
+      expect(screen.getByText(line('No command /ask'))).toBeInTheDocument();
       expect(screen.queryByText('Ask ChartSearch')).not.toBeInTheDocument();
     });
   });
@@ -1028,7 +1052,7 @@ describe('slash commands in the bar', () => {
       await user.keyboard('{Escape}');
       await user.clear(field);
       await user.type(field, '/go ward');
-      expect(screen.getByText('No command /go')).toBeInTheDocument();
+      expect(screen.getByText(line('No command /go'))).toBeInTheDocument();
       expect(pages.seen.at(-1)).toEqual({ query: '/go ward', command: undefined });
 
       await user.clear(field);
@@ -1083,6 +1107,192 @@ describe('slash commands in the bar', () => {
       } finally {
         window.i18next = original;
       }
+    });
+  });
+
+  describe('help', () => {
+    it('lists every command with examples for "?", mounting no provider, and chooses one', async () => {
+      const user = userEvent.setup();
+      const { patients, labs } = builtIns();
+      inChart();
+      render(<Omnibar />);
+
+      await user.type(screen.getByRole('combobox'), '?');
+      const options = within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option');
+
+      expect(options).toHaveLength(3);
+      expect(screen.getByText(line('Try /lab weight · /lab cd4'))).toBeInTheDocument();
+      expect(screen.getByText(line('Try /patient mary'))).toBeInTheDocument();
+      // Each example in its own direction, so a right-to-left "Try" can't move a slash to the end
+      expect(['/lab weight', '/lab cd4'].map((example) => screen.getByText(example).tagName)).toEqual(['BDI', 'BDI']);
+      expect(screen.queryByText('Type ? for examples of each command')).not.toBeInTheDocument();
+      expect(patients.seen.at(-1)?.query ?? '').toBe('');
+      expect(labs.seen.at(-1)?.query ?? '').toBe('');
+
+      await user.click(
+        within(options.find((option) => option.textContent.includes('Chart values'))).getByText('Chart values'),
+      );
+      expect(screen.getByText('Chart values')).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveValue('');
+    });
+
+    it('says to type "?" only when a command listed and available here has examples', async () => {
+      const user = userEvent.setup();
+      builtIns();
+      render(<Omnibar />);
+      const field = screen.getByRole('combobox');
+
+      // Outside a chart, "/la" lists Chart values greyed out, so "?" would add no example
+      await user.type(field, '/la');
+      expect(screen.getByText('Chart values')).toBeInTheDocument();
+      expect(screen.queryByText('Type ? for examples of each command')).not.toBeInTheDocument();
+
+      // The whole list has Patients, which works here and has one
+      await user.clear(field);
+      await user.type(field, '/');
+      expect(screen.getByText('Type ? for examples of each command')).toBeInTheDocument();
+    });
+
+    it('doesn’t say to type "?" for commands that work here but whose apps give no examples', async () => {
+      const user = userEvent.setup();
+      mount(
+        [
+          {
+            name: 'things',
+            moduleName: 'things-app',
+            meta: { lane: 'record', scopes: ['global'], command: { id: 'things', aliases: ['things'] } },
+            component: recording('Things').component,
+          },
+        ],
+        [],
+      );
+      render(<Omnibar />);
+
+      await user.type(screen.getByRole('combobox'), '/');
+      expect(screen.getByText('/things')).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: /things/ })).not.toHaveAttribute('aria-disabled', 'true');
+      expect(screen.queryByText('Type ? for examples of each command')).not.toBeInTheDocument();
+    });
+
+    it('opens for "/help" too, and the "/" list says how to get it', async () => {
+      const user = userEvent.setup();
+      builtIns();
+      inChart();
+      render(<Omnibar />);
+
+      await user.type(screen.getByRole('combobox'), '/');
+      expect(screen.getByText('Type ? for examples of each command')).toBeInTheDocument();
+
+      // Following the hint: "?" typed in the "/" list opens help, not "No command /?"
+      await user.type(screen.getByRole('combobox'), '?');
+      expect(screen.getByText(line('Try /lab weight · /lab cd4'))).toBeInTheDocument();
+      expect(screen.queryByText(line('No command /?'))).not.toBeInTheDocument();
+      await user.clear(screen.getByRole('combobox'));
+      await user.type(screen.getByRole('combobox'), '/');
+
+      await user.type(screen.getByRole('combobox'), 'help');
+      expect(screen.getByText(line('Try /lab weight · /lab cd4'))).toBeInTheDocument();
+    });
+
+    it('chooses the first available command on Enter, as the "/" list does, and sends nothing to Query results', async () => {
+      const user = userEvent.setup();
+      const { patients } = builtIns();
+      inChart();
+      render(<Omnibar />);
+
+      await user.type(screen.getByRole('combobox'), '?');
+      const first = within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')[0];
+      expect(first).toHaveTextContent('Patients');
+      await user.keyboard('{Enter}');
+
+      expect(screen.getByRole('button', { name: /Remove Patients command/ })).toBeInTheDocument();
+      expect(screen.getByRole('combobox')).toHaveValue('');
+      expect(navigate).not.toHaveBeenCalled();
+      expect(patients.seen.at(-1)?.query ?? '').toBe('');
+    });
+
+    it('keeps "?" and its hint when another app answers to "/help", which then lists that app', async () => {
+      const user = userEvent.setup();
+      const { patients, labs, pages } = builtIns();
+      const guide = recording('Guide');
+      mount(
+        [
+          {
+            name: 'omnibar-patient-search-provider',
+            meta: metaFor('omnibar-patient-search-provider'),
+            component: patients.component,
+          },
+          {
+            name: 'omnibar-chart-lookup-provider',
+            meta: metaFor('omnibar-chart-lookup-provider'),
+            component: labs.component,
+          },
+          {
+            name: 'omnibar-destinations-provider',
+            meta: metaFor('omnibar-destinations-provider'),
+            component: pages.component,
+          },
+          {
+            name: 'guide',
+            moduleName: 'guide-app',
+            meta: { lane: 'answer', scopes: ['global'], command: { id: 'kb', aliases: ['help'] } },
+            component: guide.component,
+          },
+        ],
+        views,
+      );
+      inChart();
+      render(<Omnibar />);
+      const field = screen.getByRole('combobox');
+
+      await user.type(field, '/');
+      expect(screen.getByText('Type ? for examples of each command')).toBeInTheDocument();
+
+      await user.clear(field);
+      await user.type(field, '?');
+      expect(screen.getByText(line('Try /lab weight · /lab cd4'))).toBeInTheDocument();
+
+      await user.clear(field);
+      await user.type(field, '/help');
+      expect(screen.queryByText(line('Try /lab weight · /lab cd4'))).not.toBeInTheDocument();
+      expect(within(screen.getByRole('listbox', { name: 'Commands' })).getAllByRole('option')).toHaveLength(1);
+    });
+
+    it('asks for the modules’ translations, so their examples show, when help opens', async () => {
+      const user = userEvent.setup();
+      const loadNamespaces = vi.fn(() => Promise.resolve());
+      const original = window.i18next;
+      window.i18next = { ...original, on: vi.fn(), off: vi.fn(), loadNamespaces } as never;
+      const things = recording('Things');
+      mount(
+        [
+          {
+            name: 'things',
+            moduleName: 'things-app',
+            meta: { lane: 'record', scopes: ['global'], command: { id: 'things', aliases: ['things'] } },
+            component: things.component,
+          },
+        ],
+        [],
+      );
+      try {
+        render(<Omnibar />);
+        await user.type(screen.getByRole('combobox'), '?');
+        expect(loadNamespaces).toHaveBeenCalledWith(['things-app']);
+      } finally {
+        window.i18next = original;
+      }
+    });
+
+    it('greys out a command not available here, without examples', async () => {
+      const user = userEvent.setup();
+      builtIns();
+      render(<Omnibar />);
+
+      await user.type(screen.getByRole('combobox'), '?');
+
+      expect(screen.queryByText(line('Try /lab weight · /lab cd4'))).not.toBeInTheDocument();
+      expect(screen.getByText(line('Try /patient mary'))).toBeInTheDocument();
     });
   });
 });

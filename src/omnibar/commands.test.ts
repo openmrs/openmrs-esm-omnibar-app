@@ -54,6 +54,26 @@ describe('the slash-command alias table', () => {
     }
   });
 
+  it.each([
+    ['Arabic', 'طلب، دواء', 'أموكسي، سيبرو', ['طلب', 'دواء'], ['أموكسي', 'سيبرو']],
+    ['Chinese', '开药，处方', '阿莫西林，二甲双胍、血常规', ['开药', '处方'], ['阿莫西林', '二甲双胍', '血常规']],
+  ])(
+    'splits a translated list on the comma %s is written with',
+    (_, aliases, examples, splitAliases, splitExamples) => {
+      const table = buildCommandTable(
+        [provider('drugs', { command: { id: 'order', aliases: ['order'] } }, 'drugs-app')],
+        [],
+        'en',
+        translations({
+          'drugs-app': { 'omnibarCommand.order.aliases': aliases, 'omnibarCommand.order.examples': examples },
+        }),
+      );
+
+      expect(aliasesOf(table, 'order')).toEqual(['order', ...splitAliases]);
+      expect(table.byId.get('order')?.examples).toEqual(splitExamples);
+    },
+  );
+
   it('drops the lower sources’ aliases when config replaces them', () => {
     const table = buildCommandTable(
       [provider('pages', { command: { id: 'go', aliases: ['go', 'open', 'page'] } })],
@@ -322,6 +342,7 @@ describe('the slash-command alias table', () => {
         id: 'ask',
         label: 'Ask ChartSearch',
         description: 'Ask ChartSearch, an AI, about this chart',
+        examples: [],
         aliases: ['ask', 'question'],
         scopes: ['patient'],
       });
@@ -433,7 +454,7 @@ describe('orderForListing', () => {
   });
 
   it('keeps the given order within each group and leaves the list it was given alone', () => {
-    const commands = ['a', 'b', 'c', 'd'].map((id) => ({ id, label: id, aliases: [id], scopes: [] }));
+    const commands = ['a', 'b', 'c', 'd'].map((id) => ({ id, label: id, aliases: [id], examples: [], scopes: [] }));
     const given = commands.map(({ id }) => id);
     const ordered = orderForListing(commands, (command) => command.id === 'b' || command.id === 'd');
     expect(ordered.map(({ id }) => id)).toEqual(['b', 'd', 'a', 'c']);
@@ -478,5 +499,119 @@ describe('parseCommandInput', () => {
     expect(parse(' /lab cd4')).toEqual({ mode: 'text', text: ' /lab cd4' });
     expect(parse('cd4 /lab')).toEqual({ mode: 'text', text: 'cd4 /lab' });
     expect(parse('/ cd4')).toEqual({ mode: 'text', text: '/ cd4' });
+  });
+
+  it('lists every command for help: "?" alone, as other keyboards type it too, or "/help"', () => {
+    for (const typed of ['?', ' ? ', '？', '؟', '/help', '/HELP ']) {
+      expect(parse(typed)).toEqual({ mode: 'listing', prefix: '', help: true });
+    }
+    expect(parse('? cd4')).toEqual({ mode: 'text', text: '? cd4' });
+    expect(parse('what is this?')).toEqual({ mode: 'text', text: 'what is this?' });
+  });
+
+  it('reads a "?" typed in the "/" list, as its hint says, as help for what that list shows', () => {
+    expect(parse('/?')).toEqual({ mode: 'listing', prefix: '', help: true });
+    expect(parse('/la?')).toEqual({ mode: 'listing', prefix: 'la', help: true });
+    expect(parse('/la？')).toEqual({ mode: 'listing', prefix: 'la', help: true });
+    expect(parse('/help?')).toEqual({ mode: 'listing', prefix: '', help: true });
+    expect(parse('/lab ?')).toMatchObject({ mode: 'chosen', command: { id: 'lab' }, rest: '?' });
+  });
+
+  it('leaves "/help" to an app that declares a help command of its own', () => {
+    const withHelp = buildCommandTable(
+      [provider('guide', { command: { id: 'help', aliases: ['help'] } })],
+      [],
+      'en',
+      noTranslations,
+    );
+
+    expect(parseCommandInput('/help ', withHelp, inChart)).toMatchObject({ mode: 'chosen', command: { id: 'help' } });
+    expect(parseCommandInput('/help', withHelp, inChart)).toEqual({ mode: 'listing', prefix: 'help' });
+  });
+
+  it('keeps "?" as help whatever answers to "help", even a command not available here', () => {
+    const notHere = (command: { scopes: Array<string> }) => command.scopes.includes('global');
+    const withHelp = buildCommandTable(
+      [provider('guide', { command: { id: 'kb', aliases: ['help'] } })],
+      [],
+      'en',
+      noTranslations,
+    );
+    const helpAliasInConfig = buildCommandTable(
+      [provider('pages', { lane: 'navigate', scopes: ['global'], command: { id: 'go', aliases: ['go'] } })],
+      [{ id: 'go', aliases: ['help'] }],
+      'en',
+      noTranslations,
+    );
+
+    for (const table of [withHelp, helpAliasInConfig]) {
+      for (const isAvailable of [inChart, notHere]) {
+        expect(parseCommandInput('?', table, isAvailable)).toEqual({ mode: 'listing', prefix: '', help: true });
+      }
+    }
+    expect(parseCommandInput('/help ', helpAliasInConfig, notHere)).toMatchObject({
+      mode: 'chosen',
+      command: { id: 'go' },
+    });
+  });
+});
+
+describe('command examples', () => {
+  it('merges every declaring module’s examples, cleaned, without repeats and cut to three', () => {
+    const table = buildCommandTable(
+      [
+        provider('drugs', { command: { id: 'order', aliases: ['order'] } }, 'drugs-app'),
+        provider('tests', { command: { id: 'order', aliases: ['order'] } }, 'tests-app'),
+      ],
+      [],
+      'en',
+      translations({
+        'drugs-app': { 'omnibarCommand.order.examples': ' amox ,, metformin ' },
+        'tests-app': { 'omnibarCommand.order.examples': 'amox, cbc, malaria smear' },
+      }),
+    );
+
+    expect(table.byId.get('order')?.examples).toEqual(['amox', 'metformin', 'cbc']);
+  });
+
+  it('takes each module’s first example before any module’s second, so a module giving three leaves room', () => {
+    const table = buildCommandTable(
+      [
+        provider('drugs', { command: { id: 'order', aliases: ['order'] } }, 'drugs-app'),
+        provider('tests', { command: { id: 'order', aliases: ['order'] } }, 'tests-app'),
+      ],
+      [],
+      'en',
+      translations({
+        'drugs-app': { 'omnibarCommand.order.examples': 'amox, metformin, paracetamol' },
+        'tests-app': { 'omnibarCommand.order.examples': 'cbc' },
+      }),
+    );
+
+    expect(table.byId.get('order')?.examples).toEqual(['amox', 'cbc', 'metformin']);
+  });
+
+  it('cuts each example to 40 characters and drops direction controls from it', () => {
+    const table = buildCommandTable(
+      [provider('chart', { command: { id: 'lab', aliases: ['lab'] } })],
+      [],
+      'en',
+      translations({
+        [omnibarModule]: { 'omnibarCommand.lab.examples': `\u202Ecd4\u202C, ${'a'.repeat(60)}` },
+      }),
+    );
+
+    expect(table.byId.get('lab')?.examples).toEqual(['cd4', `${'a'.repeat(39)}…`]);
+  });
+
+  it('has none when no module gives examples', () => {
+    const table = buildCommandTable(
+      [provider('chart', { command: { id: 'lab', aliases: ['lab'] } })],
+      [],
+      'en',
+      noTranslations,
+    );
+
+    expect(table.byId.get('lab')?.examples).toEqual([]);
   });
 });

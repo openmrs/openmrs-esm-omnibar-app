@@ -1782,3 +1782,45 @@ Not fixed, and why:
 - Tests: 669 on main, 673 at fc8f23d, 675 at 940d531, 693 at 7572718, 695 at 340ac3e. `yarn verify`: `Tasks: 3 successful, 3 total`. `yarn build`: `Rspack compiled with 1 warning`, the asset size limit.
 - No new origin; no new request.
 - Tried in a browser on a local O3 (the `/visit` end row on a chart with an active visit, then Cancel), before the review rounds; not on o3.
+
+## Feature: help in the bar (contract 1, additive)
+
+On `feat/help-command`. `?` alone lists every command, as a bare `/` does, with up to three examples under each one that's available here ("Try /order amox · /order cbc"). Examples come from each declaring module's translations, `omnibarCommand.<id>.examples` (comma-separated), merged across modules and cleaned like labels. `/help` alone does the same until a command answers to the alias `help`. The `/` list says "Type ? for examples of each command". Help is listed under Open in [`docs/decisions.md`](docs/decisions.md) until Paul decides.
+
+| Change | Commit |
+| --- | --- |
+| Help: `?` and `/help`, examples from each module's translations, the `/` list's hint, the host's own examples, tests and the contract doc | 831ffc0 |
+
+### Review round 1 (independent code review and security review, Claude): no blockers
+
+| Finding | Fix | Commit |
+| --- | --- | --- |
+| code, should: the guard that gives `/help` to a command answering to `help` turned off `?` too, and the `/` list still said to type it. Any alias did it, a site's config alias on `/go` included, and so did a command not available in this scope | Only `/help` gives way; `?` is always help. Tests for an app's command, a config alias and a command not available here | 83cea9f |
+| code, should: `/help` sat against AGENTS.md's "no command id is special", and README and slash-commands.md kept `/help` for a knowledge-base app that nothing in this repo names | No command id is special: the host checks only whether `help` resolves. AGENTS.md, README, slash-commands.md (Opening, a new Help section, the provider table note, Not in this slice) and the provider contract say what help is; the proposal is under Open | 83cea9f |
+| code, should: `?` then Enter in a chart chooses the first available command as a chip, where it used to send `?` to Query results, and no test said so | Kept, as the `/` list behaves; a test pins it, and slash-commands.md says so | 83cea9f |
+| code, should: not logged here or in the decisions log | This section, and the Open entry | this commit |
+| code, nit: comments in `commands.ts` and the bar still said only `/` starts command input | Updated | 83cea9f |
+| code, nit: no tests for the 40-character cut, direction controls in examples, or help asking for the modules' translations | Added. Restoring the old guard fails the two new `?` tests | 83cea9f |
+| code, nit: Arabic keyboards type `؟` and Chinese and Japanese input methods `？`, so the hint pointed at a key that didn't work there | Both open help | 83cea9f |
+| code, question: three long examples at phone width | Checked at 375 px on a chart: three 40-character examples wrap to three lines, with no horizontal scroll | n/a |
+
+### Review on the PR (Daniel)
+
+| Finding | Fix | Commit |
+| --- | --- | --- |
+| should, before merge: the `/` list's hint says to type `?`, but `/?` read as "No command /?" | A `?` typed in the `/` list opens help for what that list shows: `/?` all, `/la?` what `/la` lists. Parser cases for `/?`, `/la?` and `/help?`, and a bar test that follows the hint | f17734b |
+| nit: cutting merged examples to three let one module's three crowd out another's, so `/order` could show drugs and no lab tests | Each module's first example, then each one's second, in module order; a test with a first module giving three | 1edf8fb |
+| follow-up, taken here: in a right-to-left sentence the slash before a command joined the sentence, so an Arabic "Try" read `order amox · /order cbc/`; "No command /{{name}}" did the same on main | Each command in "Try …" and both "No command …" lines is in its own `<bdi>`. The slash moved out of `noCommand` into the command (`No command {{name}}`), so the `<bdi>` holds it; English reads as before. Tests read these lines whole and check the `<bdi>`s; without them the two checks fail. Checked on a chart with the two sentences in Arabic: each slash sits right before its command, and without `<bdi>` the first one doesn't | e1d4f2f |
+| should: translated lists were split on `,` alone, but Arabic and Chinese translators write `،`, `，` and `、` (checked in local patient-chart and patient-management checkouts: 35 of the 38 `ar`, `zh`, `zh_CN` and `zh_TW` strings whose English has a comma), so `أموكسي، سيبرو` was one example and an alias list like `اذهب، انتقل` was dropped whole | One `listSeparator`, `/[,،，、]/u`, splits both the examples and the translated aliases. Arabic and Chinese cases in the table's tests, which fail without it; slash-commands.md names the commas. Checked on 8090 with those strings put in the page's translations: help shows two and three examples, and `/انتقل` chooses Pages | 8735f45 |
+| should: the `/` list said to type `?` even when `?` would show no example: outside a chart `/la` lists Chart values greyed out, and commands whose apps declare no examples have none | The hint shows only when a listed command works here and has examples. Two tests, each failing without its half of the check: outside a chart `/la` has no hint and `/` still has it; a command that works here but has no examples gets no hint. Checked on 8090: no hint for `/la` or `/coh` outside a chart, the hint for `/`, `/o` and, in a chart, `/la` | 7f7b98c |
+| should: in the command list Shift+Tab chose the highlighted command, as Tab does, where plain text lets it move focus; `?` was plain text on main, so this PR turned it from moving focus to choosing a command, and the `/` list did the same on main | Shift+Tab returns before the list's Tab handling, so the browser moves focus. A test for `/` and `?` that Shift+Tab reaches the patient chip and leaves the field as typed, failing on both before the change. Checked on 8090: in a chart, `?` then Shift+Tab focuses the patient chip's remove button and chooses nothing | this commit |
+
+Quick review of the `<bdi>` change (one reviewer, as for a small UX change): no blockers. The slot survives i18next with escaping on or off, the commands reach React only as text, the examples are deduped so keys are unique, and nothing else depends on the old `noCommand` text. Fixed: a translation that repeats the slot lost its text after the second one; it now keeps all of it, with the commands once. Left: a translation that drops the slot shows the command after it with no space, a mistranslation that used to hide the command altogether; and `noCommand` keeps its key though its text lost the slash, since there are no translations yet that could bring the slash back.
+
+Quick review of the commas and the hint (one reviewer): no blockers. The two translated lists are the only ones split on a comma; the hint uses the same availability check as the list and the same examples help shows, so the two agree, also while a module's translations are still loading. Fixed: nothing tested the hint's "has examples" half, so a test now has a command that works here with no examples; the contract doc and slash-commands.md name the other commas for examples as well as aliases. Left: `types.ts` in the contract folder still says "comma-separated", which stays true, so the apps' copies needn't change; the Ethiopic `፣` isn't split on, as Amharic translations are almost empty so far.
+
+Checked and fine: examples go through `cleanText` and render as React text, and i18next doesn't expand `{{…}}` or `$t(…)` inside an interpolated value; no provider is mounted while help shows; commands not available here show no examples; the composition guard covers Enter on the help list.
+
+Not fixed, and why:
+
+- `looksLikeQuestion` and `looksLikeIdentifier` in `query-hints.ts` still know only the ASCII `?`, so `weight?` reads as a question but `الوزن؟` and `体重多少？` don't, though help accepts all three marks. Both must change together, or `12345？` reads as a question about an ID, and the contract doc's "ending in `?`" with them. Raised by Daniel in review; left for a follow-up, since it changes the contract folder and how questions reach a model, not help.
